@@ -133,6 +133,7 @@
     <Compile Include="Flight\Readouts\Vessel\Pitch.cs" />
     <Compile Include="Flight\Readouts\Vessel\Heading.cs" />
     <Compile Include="Flight\Readouts\Vessel\PartCount.cs" />
+    <Compile Include="Flight\Readouts\Vessel\SuicideBurnTimer.cs" />
     <Compile Include="Flight\Readouts\Vessel\SuicideBurnDeltaV.cs" />
     <Compile Include="Flight\Readouts\Vessel\SuicideBurnAltitude.cs" />
     <Compile Include="Flight\Readouts\Vessel\SuicideBurnDistance.cs" />

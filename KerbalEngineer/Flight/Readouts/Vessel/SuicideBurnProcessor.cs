@@ -30,9 +30,11 @@ namespace KerbalEngineer.Flight.Readouts.Vessel
 
         public static double Altitude { get; private set; }
 
+        public static double Distance { get; private set; }
+
         public static double DeltaV { get; private set; }
 
-        public static double Distance { get; private set; }
+        public static double Countdown { get; private set; }
 
         public static SuicideBurnProcessor Instance
         {
@@ -62,6 +64,9 @@ namespace KerbalEngineer.Flight.Readouts.Vessel
             DeltaV = Math.Sqrt((2 * m_Gravity * m_RadarAltitude) + Math.Pow(FlightGlobals.ship_verticalSpeed, 2.0));
             Altitude = Math.Pow(DeltaV, 2.0) / (2.0 * m_Acceleration);
             Distance = m_RadarAltitude - Altitude;
+
+            Countdown = Surface.ImpactProcessor.Time - 0.5 *
+                (SimulationProcessor.LastStage.time / SimulationProcessor.LastStage.deltaV * DeltaV);
 
             ShowDetails = !double.IsInfinity(Distance);
         }
