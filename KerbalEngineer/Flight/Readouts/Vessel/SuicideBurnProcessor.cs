@@ -19,6 +19,8 @@
 
 namespace KerbalEngineer.Flight.Readouts.Vessel
 {
+    using Extensions;
+    using Surface;
     using System;
 
     public class SuicideBurnProcessor : IUpdatable, IUpdateRequest
@@ -46,14 +48,32 @@ namespace KerbalEngineer.Flight.Readouts.Vessel
 
         public static bool ShowDetails { get; set; }
 
+        public static double Clamp(double x, double min, double max)
+        {
+            if (x < min) return min;
+            if (x > max) return max;
+            return x;
+        }
+
+
         public void Update()
         {
-            if (FlightGlobals.currentMainBody == null || FlightGlobals.ActiveVessel == null || SimulationProcessor.LastStage == null ||
-                FlightGlobals.ship_orbit.PeA >= 0.0 || !SimulationProcessor.ShowDetails)
+            var vessel = FlightGlobals.ActiveVessel;
+            CelestialBody body = vessel?.mainBody;
+
+            if (FlightGlobals.currentMainBody == null || vessel == null || 
+                SimulationProcessor.LastStage == null || !SimulationProcessor.ShowDetails ||
+                FlightGlobals.ship_orbit.PeA >= 0.0 || !Surface.ImpactProcessor.ShowDetails )
             {
                 ShowDetails = false;
                 return;
             }
+
+            Vector3d up = (vessel.CoMD - body.position).normalized;
+            double angleFromHorizontal = 90 - Vector3d.Angle(-vessel.srf_velocity, up);
+            angleFromHorizontal = Clamp(angleFromHorizontal, 0, 90);
+
+            double sine = Math.Sin(angleFromHorizontal * UtilMath.Deg2Rad);
 
             m_Gravity = FlightGlobals.currentMainBody.gravParameter / Math.Pow(FlightGlobals.currentMainBody.Radius, 2.0);
             m_Acceleration = SimulationProcessor.LastStage.thrust / SimulationProcessor.LastStage.totalMass;
@@ -61,12 +81,19 @@ namespace KerbalEngineer.Flight.Readouts.Vessel
                 ? FlightGlobals.ship_altitude - FlightGlobals.ActiveVessel.terrainAltitude
                 : FlightGlobals.ship_altitude;
 
-            DeltaV = Math.Sqrt((2 * m_Gravity * m_RadarAltitude) + Math.Pow(FlightGlobals.ship_verticalSpeed, 2.0));
-            Altitude = Math.Pow(DeltaV, 2.0) / (2.0 * m_Acceleration);
+            double effectiveDecel = 0.5 * 
+                (-2 * m_Gravity * sine 
+                    + Math.Sqrt((2 * m_Gravity * sine) * (2 * m_Gravity * sine) 
+                        + 4 * (m_Acceleration * m_Acceleration - m_Gravity * m_Gravity)
+                    )
+                );
+            double decelTime = vessel.srfSpeed / effectiveDecel;
+
+            Altitude = Surface.ImpactProcessor.Altitude - vessel.verticalSpeed * 0.5 * decelTime;
             Distance = m_RadarAltitude - Altitude;
 
-            Countdown = Surface.ImpactProcessor.Time - 0.5 *
-                (SimulationProcessor.LastStage.time / SimulationProcessor.LastStage.deltaV * DeltaV);
+            DeltaV = decelTime / SimulationProcessor.LastStage.time * SimulationProcessor.LastStage.deltaV;
+            Countdown = Surface.ImpactProcessor.Time - 0.5 * decelTime;
 
             ShowDetails = !double.IsInfinity(Distance);
         }
@@ -77,10 +104,12 @@ namespace KerbalEngineer.Flight.Readouts.Vessel
         {
             s_Instance.UpdateRequested = true;
             SimulationProcessor.RequestUpdate();
+            ImpactProcessor.RequestUpdate();
         }
 
         public static void Reset()
         {
+            FlightEngineerCore.Instance.AddUpdatable(ImpactProcessor.Instance);
             FlightEngineerCore.Instance.AddUpdatable(SimulationProcessor.Instance);
             FlightEngineerCore.Instance.AddUpdatable(s_Instance);
         }
