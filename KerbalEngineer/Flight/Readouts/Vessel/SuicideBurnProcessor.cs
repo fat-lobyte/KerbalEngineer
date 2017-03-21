@@ -75,25 +75,45 @@ namespace KerbalEngineer.Flight.Readouts.Vessel
 
             double sine = Math.Sin(angleFromHorizontal * UtilMath.Deg2Rad);
 
-            m_Gravity = FlightGlobals.currentMainBody.gravParameter / Math.Pow(FlightGlobals.currentMainBody.Radius, 2.0);
+            m_Gravity = FlightGlobals.currentMainBody.gravParameter / 
+                Math.Pow(FlightGlobals.currentMainBody.Radius + ImpactProcessor.Altitude, 2.0);
+
             m_Acceleration = SimulationProcessor.LastStage.thrust / SimulationProcessor.LastStage.totalMass;
             m_RadarAltitude = FlightGlobals.ActiveVessel.terrainAltitude > 0.0
                 ? FlightGlobals.ship_altitude - FlightGlobals.ActiveVessel.terrainAltitude
                 : FlightGlobals.ship_altitude;
 
+            // calculate "effective deceleration". This is stolen from MechJeb2 and no one knows what this actually does.
             double effectiveDecel = 0.5 * 
                 (-2 * m_Gravity * sine 
                     + Math.Sqrt((2 * m_Gravity * sine) * (2 * m_Gravity * sine) 
                         + 4 * (m_Acceleration * m_Acceleration - m_Gravity * m_Gravity)
                     )
                 );
-            double decelTime = vessel.srfSpeed / effectiveDecel;
 
-            Altitude = Surface.ImpactProcessor.Altitude - vessel.verticalSpeed * 0.5 * decelTime;
+            // get time of impact
+            double impactUT = ImpactProcessor.Time + Planetarium.GetUniversalTime();
+
+            // get orbital velocity at time of impact
+            Vector3d orbitalVelocityAtImpact =
+                vessel.orbit.getOrbitalVelocityAtUT(impactUT);
+
+            // calculate surface velocity at time of impact
+            Vector3d up_at_impact = vessel.orbit.RadialPlus(impactUT);
+            Vector3d velocityAtImpact = orbitalVelocityAtImpact - Vector3d.Cross(body.angularVelocity, up_at_impact) * (body.Radius + ImpactProcessor.Altitude);
+
+            // calculate deceleration time
+            double decelTime = velocityAtImpact.magnitude / effectiveDecel;
+
+            Vector3d burnStartPosition =
+                body.GetWorldSurfacePosition(ImpactProcessor.Latitude, ImpactProcessor.Longitude, ImpactProcessor.Altitude)
+                - 0.5 * decelTime * velocityAtImpact;
+
+            Altitude = body.GetAltitude(burnStartPosition);
             Distance = m_RadarAltitude - Altitude;
 
             DeltaV = decelTime / SimulationProcessor.LastStage.time * SimulationProcessor.LastStage.deltaV;
-            Countdown = Surface.ImpactProcessor.Time - 0.5 * decelTime;
+            Countdown = ImpactProcessor.Time - 0.5 * decelTime;
 
             ShowDetails = !double.IsInfinity(Distance);
         }

@@ -152,6 +152,48 @@ namespace KerbalEngineer.Extensions
             return 180.0 - orbit.argumentOfPeriapsis;
         }
 
+
+
+        //can probably be replaced with Vector3d.xzy?
+        public static Vector3d SwapYZ(Vector3d v)
+        {
+            return v.xzy;
+        }
+
+        //
+        // These "Swapped" functions translate preexisting Orbit class functions into world
+        // space. For some reason, Orbit class functions seem to use a coordinate system
+        // in which the Y and Z coordinates are swapped.
+        //
+        public static Vector3d SwappedOrbitalVelocityAtUT(this Orbit o, double UT)
+        {
+            return SwapYZ(o.getOrbitalVelocityAtUT(UT));
+        }
+
+        //position relative to the primary
+        public static Vector3d SwappedRelativePositionAtUT(this Orbit o, double UT)
+        {
+            return SwapYZ(o.getRelativePositionAtUT(UT));
+        }
+
+        //normalized vector along the orbital velocity
+        public static Vector3d Prograde(this Orbit o, double UT)
+        {
+            return o.SwappedOrbitalVelocityAtUT(UT).normalized;
+        }
+
+        //normalized vector pointing radially outward from the planet
+        public static Vector3d Up(this Orbit o, double UT)
+        {
+            return o.SwappedRelativePositionAtUT(UT).normalized;
+        }
+
+        //normalized vector pointing radially outward and perpendicular to prograde
+        public static Vector3d RadialPlus(this Orbit o, double UT)
+        {
+            return Vector3d.Exclude(o.Prograde(UT), o.Up(UT)).normalized;
+        }
+
         #endregion
     }
 }
