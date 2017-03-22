@@ -36,7 +36,7 @@ namespace KerbalEngineer.Flight.Readouts.Vessel
         {
             this.Name = "Suicide Burn (Alt.)";
             this.Category = ReadoutCategory.GetCategory("Vessel");
-            this.HelpString = "Shows the altitude when to start a suicide burn.";
+            this.HelpString = "Altitude lost during a suicide burn until all velocity is killed.";
             this.IsDefault = false;
         }
 
