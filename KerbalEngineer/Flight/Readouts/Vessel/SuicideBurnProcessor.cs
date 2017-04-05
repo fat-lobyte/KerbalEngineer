@@ -24,8 +24,98 @@ namespace KerbalEngineer.Flight.Readouts.Vessel
 
     public class SuicideBurnProcessor : IUpdatable, IUpdateRequest
     {
+        private struct BurnSimulationParameters
+        {
+            // number of simulation steps
+            public ushort n_steps;
+
+            // transformed initial angle to vertical
+            public double z0;
+
+            // initial velocity
+            public double v0;
+
+            // gravitational acceleration
+            public double g;
+
+            // thrust to weight ratio
+            public double n;
+        };
+
+
+        private struct BurnSimulator
+        {
+            // horizontal displacement during suicide burn
+            public double x { get; private set; }
+
+            // vertical displacement during suicide burn
+            public double y { get; private set; }
+
+            // duration of suicide burn
+            public double t1 { get; private set; }
+
+            // initial condition parameters
+            private BurnSimulationParameters pars;
+
+            // initial condition parameter
+            private double C;
+
+            // simulation state variables
+            private double psi, z, v, t;
+            private double psi_prev, t_prev, v_prev;
+
+            // simulation step variables
+            private double z_step;
+            private double dt, dx, dy;
+
+            public void init(ref BurnSimulationParameters parameters)
+            {
+                pars = parameters;
+
+                x = 0;
+                y = 0;
+
+                z_step = pars.z0 / pars.n_steps;
+                z = pars.z0;
+
+                C = pars.v0 / (Math.Pow(pars.z0, pars.n - 1.0) * (1 + (pars.z0* pars.z0)));
+                t1 = C / pars.g * Math.Pow(pars.z0, pars.n - 1.0) * (1.0 / (pars.n - 1.0) + pars.z0 * pars.z0 / (pars.n + 1.0));
+
+                t_prev = t1;
+                psi_prev = 2 * Math.Atan(pars.z0);
+                v_prev = pars.v0;
+            }
+
+            public void simulate()
+            {
+                while (z > 0) step();
+            }
+
+            private void step()
+            {
+                psi = 2 * Math.Atan(z);
+                v = C * Math.Pow(z, pars.n - 1.0) * (1.0 + z * z);
+                t = C / pars.g * Math.Pow(z, pars.n - 1.0) * (1.0 / (pars.n - 1.0) + z * z / (pars.n + 1.0));
+
+                dt = t_prev - t;
+                dx = 0.5 * (v * Math.Sin(psi) + v_prev * Math.Sin(psi_prev)) * dt;
+                dy = 0.5 * (v * Math.Cos(psi) + v_prev * Math.Cos(psi_prev)) * dt;
+
+                x += dx;
+                y += dy;
+
+                t_prev = t;
+                psi_prev = psi;
+                v_prev = v;
+
+                z -= z_step;
+            }
+        };
+
         private static readonly SuicideBurnProcessor s_Instance = new SuicideBurnProcessor();
-        private double m_Gravity;
+
+        private BurnSimulationParameters burn_simulation_parameters = new BurnSimulationParameters();
+        private BurnSimulator burn_simulator = new BurnSimulator();
         private double m_RadarAltitude;
 
         public static double Altitude { get; private set; }
@@ -59,6 +149,8 @@ namespace KerbalEngineer.Flight.Readouts.Vessel
                 return;
             }
 
+
+
             // get time of impact
             double impactUT = ImpactProcessor.Time + Planetarium.GetUniversalTime();
 
@@ -66,68 +158,40 @@ namespace KerbalEngineer.Flight.Readouts.Vessel
             Vector3d orbitalVelocityAtImpact, orbitalPosAtImpact;
             vessel.orbit.GetOrbitalStateVectorsAtUT(impactUT, out orbitalPosAtImpact, out orbitalVelocityAtImpact);
 
-            // calculate impact angle and impact velocity considering the planet rotation
+            // calculate impact angle and impact velocity accounting for the planet rotation
             Vector3d velocityAtImpact = orbitalVelocityAtImpact - vessel.orbit.GetRotFrameVelAtPos(body, orbitalPosAtImpact);
             double angleToVertical = Vector3d.Angle(-orbitalPosAtImpact, velocityAtImpact) * Math.PI / 180.0;
             double speedAtImpact = velocityAtImpact.magnitude;
+            
+            burn_simulation_parameters.g = FlightGlobals.currentMainBody.gravParameter /
+                           Math.Pow(body.Radius + ImpactProcessor.Altitude, 2.0);
 
 
-            // gravity at impact
-            m_Gravity = FlightGlobals.currentMainBody.gravParameter /
-                           Math.Pow(FlightGlobals.currentMainBody.Radius + ImpactProcessor.Altitude, 2.0);
+            // Sharaf, M.A., & Alaqal, L.A.(2012).Computational Algorithm for Gravity Turn Maneuver, 12 (13).
 
             m_RadarAltitude = FlightGlobals.ActiveVessel.terrainAltitude > 0.0
                 ? FlightGlobals.ship_altitude - FlightGlobals.ActiveVessel.terrainAltitude
                 : FlightGlobals.ship_altitude;
 
-
-            // Sharaf, M.A., & Alaqal, L.A.(2012).Computational Algorithm for Gravity Turn Maneuver, 12 (13).
-
             // calculate TWR at the impact point
-            double n = SimulationProcessor.LastStage.thrust / (SimulationProcessor.LastStage.mass * m_Gravity);
-                
-               // SimulationProcessor.LastStage.thrustToWeight;
-            double z0 = Math.Tan(0.5 * angleToVertical);
-            double C = speedAtImpact / (Math.Pow(z0, n - 1.0) * (1 + (z0*z0)));
+            burn_simulation_parameters.n = SimulationProcessor.LastStage.thrust
+                / (SimulationProcessor.LastStage.mass * burn_simulation_parameters.g);
 
-            double decelTime = C / m_Gravity * Math.Pow(z0, n - 1.0) * (1.0 / (n - 1.0) + z0 * z0 / (n + 1.0));
+            burn_simulation_parameters.n_steps = 50;
+            burn_simulation_parameters.v0 = speedAtImpact;
+            burn_simulation_parameters.z0 = Math.Tan(0.5 * angleToVertical);
 
-            // we simulate by varying the z parameter, and we split it up in N_STEPS.
-            uint N_STEPS = 100;
-            double z_step = z0 / N_STEPS;
-            double psi_step = angleToVertical / N_STEPS;
+            m_RadarAltitude = FlightGlobals.ActiveVessel.terrainAltitude > 0.0
+                ? FlightGlobals.ship_altitude - FlightGlobals.ActiveVessel.terrainAltitude
+                : FlightGlobals.ship_altitude;
 
-            // simulation variables
-            double psi, z, v, t, dt;
-            double x = 0.0, y = 0.0;
-
-
-            double t_prev = decelTime;
-            double psi_prev = angleToVertical;
-            double v_prev = speedAtImpact;
-
-            // suicide burn simulation loop
-            //for (double z = z0; z >= 0.0; z -= z_step)
-            for (psi = angleToVertical; psi >= 0.0; psi -= psi_step)
-            {
-                //psi = 2 * Math.Atan(z);
-                z = Math.Tan(0.5 * psi);
-                v = C * Math.Pow(z, n - 1.0) * (1.0 + z * z);
-                t = C / m_Gravity * Math.Pow(z, n - 1.0) * (1.0/(n - 1.0) + z*z / (n + 1.0));
-
-                dt = t_prev - t;
-                x += 0.5 * (v * Math.Sin(psi) + v_prev * Math.Sin(psi_prev)) * dt;
-                y += 0.5 * (v * Math.Cos(psi) + v_prev * Math.Cos(psi_prev)) * dt; 
-
-                t_prev = t;
-                psi_prev = psi;
-                v_prev = v;
-            }
+            burn_simulator.init(ref burn_simulation_parameters);
+            burn_simulator.simulate();
 
             // store results
-            Countdown = ImpactProcessor.Time - 0.5 * decelTime;
-            DeltaV = decelTime / SimulationProcessor.LastStage.time * SimulationProcessor.LastStage.deltaV;
-            Altitude = ImpactProcessor.Altitude + y;
+            Countdown = ImpactProcessor.Time - 0.5 * burn_simulator.t1;
+            DeltaV = burn_simulator.t1 / SimulationProcessor.LastStage.time * SimulationProcessor.LastStage.deltaV;
+            Altitude = ImpactProcessor.Altitude + burn_simulator.y;
             Distance = m_RadarAltitude - Altitude;
 
             ShowDetails = !double.IsInfinity(Distance);
