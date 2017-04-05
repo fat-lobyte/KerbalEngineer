@@ -26,9 +26,6 @@ namespace KerbalEngineer.Flight.Readouts.Vessel
     {
         private struct BurnSimulationParameters
         {
-            // number of simulation steps
-            public ushort n_steps;
-
             // transformed initial angle to vertical
             public double z0;
 
@@ -40,6 +37,9 @@ namespace KerbalEngineer.Flight.Readouts.Vessel
 
             // thrust to weight ratio
             public double n;
+
+            // Body radius for calculation, Currently unused.
+            public double R;
         };
 
 
@@ -75,7 +75,6 @@ namespace KerbalEngineer.Flight.Readouts.Vessel
                 x = 0;
                 y = 0;
 
-                z_step = pars.z0 / pars.n_steps;
                 z = pars.z0;
 
                 C = pars.v0 / (Math.Pow(pars.z0, pars.n - 1.0) * (1 + (pars.z0* pars.z0)));
@@ -86,13 +85,17 @@ namespace KerbalEngineer.Flight.Readouts.Vessel
                 v_prev = pars.v0;
             }
 
-            public void simulate()
+            public void simulate(ushort n_steps)
             {
+                z_step = pars.z0 / n_steps;
+
                 while (z > 0) step();
             }
 
             private void step()
             {
+                // Sharaf, M.A., & Alaqal, L.A.(2012).Computational Algorithm for Gravity Turn Maneuver, 12 (13).
+
                 psi = 2 * Math.Atan(z);
                 v = C * Math.Pow(z, pars.n - 1.0) * (1.0 + z * z);
                 t = C / pars.g * Math.Pow(z, pars.n - 1.0) * (1.0 / (pars.n - 1.0) + z * z / (pars.n + 1.0));
@@ -126,6 +129,8 @@ namespace KerbalEngineer.Flight.Readouts.Vessel
 
         public static double Countdown { get; private set; }
 
+        const ushort N_STEPS = 50;
+
         public static SuicideBurnProcessor Instance
         {
             get
@@ -139,6 +144,7 @@ namespace KerbalEngineer.Flight.Readouts.Vessel
         public void Update()
         {
             var vessel = FlightGlobals.ActiveVessel;
+            Orbit orbit = vessel?.orbit;
             CelestialBody body = vessel?.mainBody;
 
             if (FlightGlobals.currentMainBody == null || vessel == null ||
@@ -149,44 +155,38 @@ namespace KerbalEngineer.Flight.Readouts.Vessel
                 return;
             }
 
+            // radius of fictional body which is the radius of the actual body plus altitude at the impact point (including terrain altitude)
+            burn_simulation_parameters.R = body.Radius + ImpactProcessor.Altitude;
 
+            // gravity at impact point
+            burn_simulation_parameters.g = body.gravParameter /
+                (burn_simulation_parameters.R * burn_simulation_parameters.R);
 
-            // get time of impact
+            // TWR at the impact point
+            burn_simulation_parameters.n = SimulationProcessor.LastStage.thrust
+                / (SimulationProcessor.LastStage.mass * burn_simulation_parameters.g);
+
+            // time of impact
             double impactUT = ImpactProcessor.Time + Planetarium.GetUniversalTime();
 
             // get orbital velocity and orbital position at time of impact
             Vector3d orbitalVelocityAtImpact, orbitalPosAtImpact;
-            vessel.orbit.GetOrbitalStateVectorsAtUT(impactUT, out orbitalPosAtImpact, out orbitalVelocityAtImpact);
+            orbit.GetOrbitalStateVectorsAtUT(impactUT, out orbitalPosAtImpact, out orbitalVelocityAtImpact);
 
-            // calculate impact angle and impact velocity accounting for the planet rotation
-            Vector3d velocityAtImpact = orbitalVelocityAtImpact - vessel.orbit.GetRotFrameVelAtPos(body, orbitalPosAtImpact);
-            double angleToVertical = Vector3d.Angle(-orbitalPosAtImpact, velocityAtImpact) * Math.PI / 180.0;
-            double speedAtImpact = velocityAtImpact.magnitude;
-            
-            burn_simulation_parameters.g = FlightGlobals.currentMainBody.gravParameter /
-                           Math.Pow(body.Radius + ImpactProcessor.Altitude, 2.0);
+            // impact velocity accounting for the planet rotation
+            Vector3d impactVelocity = orbitalVelocityAtImpact - orbit.GetRotFrameVelAtPos(body, orbitalPosAtImpact);
+            burn_simulation_parameters.v0 = impactVelocity.magnitude;
 
-
-            // Sharaf, M.A., & Alaqal, L.A.(2012).Computational Algorithm for Gravity Turn Maneuver, 12 (13).
-
-            m_RadarAltitude = FlightGlobals.ActiveVessel.terrainAltitude > 0.0
-                ? FlightGlobals.ship_altitude - FlightGlobals.ActiveVessel.terrainAltitude
-                : FlightGlobals.ship_altitude;
-
-            // calculate TWR at the impact point
-            burn_simulation_parameters.n = SimulationProcessor.LastStage.thrust
-                / (SimulationProcessor.LastStage.mass * burn_simulation_parameters.g);
-
-            burn_simulation_parameters.n_steps = 50;
-            burn_simulation_parameters.v0 = speedAtImpact;
+            // impact angle
+            double angleToVertical = Vector3d.Angle(-orbitalPosAtImpact, impactVelocity) * Math.PI / 180.0;
             burn_simulation_parameters.z0 = Math.Tan(0.5 * angleToVertical);
 
-            m_RadarAltitude = FlightGlobals.ActiveVessel.terrainAltitude > 0.0
-                ? FlightGlobals.ship_altitude - FlightGlobals.ActiveVessel.terrainAltitude
-                : FlightGlobals.ship_altitude;
-
+            // do suicide burn simulation
             burn_simulator.init(ref burn_simulation_parameters);
-            burn_simulator.simulate();
+            burn_simulator.simulate(N_STEPS);
+
+            m_RadarAltitude = vessel.terrainAltitude > 0.0 ?
+                vessel.altitude - vessel.terrainAltitude : vessel.altitude;
 
             // store results
             Countdown = ImpactProcessor.Time - 0.5 * burn_simulator.t1;
